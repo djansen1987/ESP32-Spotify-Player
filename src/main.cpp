@@ -7,6 +7,7 @@
 #include <Arduino.h>
 #include <LittleFS.h>
 #include <WiFi.h>
+#include <esp_heap_caps.h>
 #include <esp_system.h>
 #include <lvgl.h>
 
@@ -50,8 +51,57 @@ static void logResetReason() {
 static void checkHeap() {
     uint32_t freeHeap = ESP.getFreeHeap();
     uint32_t maxBlock = ESP.getMaxAllocHeap();
-    app_log(LL_DEBUG, "Heap free=%u max=%u min=%u", (unsigned)freeHeap, (unsigned)maxBlock, (unsigned)ESP.getMinFreeHeap());
+    app_log(LL_DEBUG, "Heap free=%u max=%u min=%u 8bit=%u", (unsigned)freeHeap, (unsigned)maxBlock, (unsigned)ESP.getMinFreeHeap(), (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT));
+    lv_mem_monitor_t mon;
+    lv_mem_monitor(&mon);
+    app_log(LL_DEBUG, "LVGL used=%u%% free=%u biggest=%u", (unsigned)mon.used_pct, (unsigned)mon.free_size, (unsigned)mon.free_biggest_size);
     if (freeHeap < LOW_HEAP_BYTES) app_log(LL_WARN, "Low heap: free=%u max=%u", (unsigned)freeHeap, (unsigned)maxBlock);
+}
+
+static const char *resetReasonName() {
+    switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:
+        return "power";
+    case ESP_RST_SW:
+        return "software";
+    case ESP_RST_PANIC:
+        return "panic";
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT:
+        return "watchdog";
+    case ESP_RST_BROWNOUT:
+        return "brownout";
+    default:
+        return "other";
+    }
+}
+
+static String deviceInfo() {
+    String t;
+    if (WiFi.status() == WL_CONNECTED) {
+        int rssi = WiFi.RSSI();
+        const char *quality = rssi >= -55 ? "excellent" : rssi >= -65 ? "good" : rssi >= -75 ? "fair" : "weak";
+        t += "IP: " + WiFi.localIP().toString() + "\n";
+        t += "Gateway: " + WiFi.gatewayIP().toString() + "\n";
+        t += "SSID: " + WiFi.SSID() + " (ch " + String(WiFi.channel()) + ")\n";
+        t += "Signal: " + String(rssi) + " dBm (" + quality + ")\n";
+    } else {
+        t += "Wi-Fi not connected\n";
+        t += "Setup IP: " + WiFi.softAPIP().toString() + "\n";
+        t += "Stored SSID: " + g_config.ssid + "\n";
+        t += "Clients on setup AP: " + String(WiFi.softAPgetStationNum()) + "\n";
+    }
+    t += "MAC: " + WiFi.macAddress() + "\n";
+    uint32_t up = millis() / 1000;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "Up %uh %02um, reset: %s\n", (unsigned)(up / 3600), (unsigned)((up / 60) % 60), resetReasonName());
+    t += buf;
+    snprintf(buf, sizeof(buf), "Heap: %uK free, %uK block\n", (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(ESP.getMaxAllocHeap() / 1024));
+    t += buf;
+    snprintf(buf, sizeof(buf), "Spotify: %s, poll %u ms", spotify_token_valid() ? "token ok" : "no token", (unsigned)spotify_last_poll_ms());
+    t += buf;
+    return t;
 }
 
 static bool connectStation() {
@@ -126,6 +176,7 @@ void setup() {
 
     display_init();
     ui_init();
+    ui_set_info_provider(deviceInfo);
     show_setup_screen();
     spotify_init();
 

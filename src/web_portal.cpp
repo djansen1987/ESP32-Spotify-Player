@@ -40,6 +40,15 @@ button.small{width:auto;padding:8px 16px;font-size:14px;background:#282828}
 #log .W{color:#F5A623}
 #log .E{color:#ff6b6b}
 #log .D{color:#7f7f7f}
+.pl{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #282828}
+.pl span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pl button{width:auto;padding:6px 12px;font-size:13px;background:#282828}
+#pl-results{max-height:320px;overflow-y:auto;margin-top:10px}
+[hidden]{display:none!important}
+.tabs{display:flex;gap:4px;margin-bottom:24px;background:#222;padding:4px;border-radius:500px}
+.tabs button{flex:1;padding:8px 4px;font-size:14px;background:transparent;color:#B3B3B3}
+.tabs button:hover{background:#2a2a2a}
+.tabs button.active{background:#1DB954;color:#fff}
 </style>
 </head>
 <body>
@@ -51,7 +60,14 @@ const char PAGE_BOTTOM[] PROGMEM = "</div>\n</body>\n</html>\n";
 const char INDEX_BODY[] PROGMEM = R"rawliteral(
 <h2>Device Setup</h2>
 
-<div class="section">
+<nav class="tabs" id="tabs">
+<button type="button" data-go="wifi">Wi-Fi</button>
+<button type="button" data-go="spotify" class="sta-only" hidden>Spotify</button>
+<button type="button" data-go="playlists" class="sta-only" hidden>Playlists</button>
+<button type="button" data-go="debug">Debug</button>
+</nav>
+
+<div class="section" data-tab="wifi" hidden>
 <h3>Wi-Fi Settings</h3>
 <form action="/save-wifi" method="POST">
 <label for="ssid">Network Name (SSID)</label>
@@ -62,7 +78,7 @@ const char INDEX_BODY[] PROGMEM = R"rawliteral(
 </form>
 </div>
 
-<div class="section sta-only" hidden>
+<div class="section" data-tab="spotify" hidden>
 <h3>Spotify Settings</h3>
 <span class="hint">Create an app at developer.spotify.com and add <code>http://127.0.0.1:8080/callback</code> as redirect URI. Playback control requires Spotify Premium.</span>
 <label for="client_id">Spotify Client ID</label>
@@ -77,7 +93,7 @@ const char INDEX_BODY[] PROGMEM = R"rawliteral(
 <div class="msg" id="msg"></div>
 </div>
 
-<div class="section sta-only" hidden>
+<div class="section" data-tab="spotify" hidden>
 <h3>Album Art</h3>
 <form id="art-form">
 <label for="resolution">Resolution</label>
@@ -91,16 +107,45 @@ const char INDEX_BODY[] PROGMEM = R"rawliteral(
 <div class="msg" id="art-msg"></div>
 </div>
 
-<div class="section">
-<details id="log-section">
-<summary>Debug Log</summary>
+<div class="section" data-tab="playlists" hidden>
+<h3>Playlists</h3>
+<span class="hint">Pinned playlists are shown first on the display. Search all your playlists to pin more.</span>
+<div id="pins"></div>
+
+<h4>Add by URL or ID</h4>
+<div class="row" style="margin-bottom:6px">
+<input type="text" id="add-id" placeholder="https://open.spotify.com/playlist/..." autocapitalize="none" autocorrect="off" style="flex:1;min-width:0">
+<button type="button" class="small" id="add-btn">Add</button>
+</div>
+<input type="text" id="add-name" placeholder="Name (optional, otherwise looked up)" maxlength="80" style="margin-bottom:6px">
+<div class="msg" id="add-msg" style="margin-top:0"></div>
+
+<h4>Search Spotify</h4>
+<div class="row" style="margin-bottom:6px">
+<input type="text" id="sp-search" placeholder="Find any playlist, e.g. a radio" maxlength="50" autocapitalize="none" autocorrect="off" style="flex:1;min-width:0">
+<button type="button" class="small" id="sp-btn">Search</button>
+</div>
+<div class="msg" id="sp-msg" style="margin-top:0"></div>
+<div id="sp-results"></div>
+<button type="button" class="small" id="sp-more" hidden style="margin-top:10px">More results</button>
+
+<h4>My playlists</h4>
+<input type="text" id="pl-search" placeholder="Search my playlists" autocapitalize="none" autocorrect="off" style="margin-bottom:0">
+<div class="row" style="margin:10px 0 0">
+<button type="button" class="small" id="load-playlists">Refresh playlists</button>
+<span id="pl-progress"></span>
+</div>
+<div id="pl-results"></div>
+</div>
+
+<div class="section" data-tab="debug" hidden>
+<h3>Debug Log</h3>
 <div class="row">
 <label style="margin:0"><input type="checkbox" id="debug"> Verbose logging</label>
 <button type="button" class="small" id="copy-log">Copy</button>
 <button type="button" class="small" id="clear-log">Clear</button>
 </div>
 <pre id="log"></pre>
-</details>
 </div>
 
 <script>
@@ -110,12 +155,26 @@ const msg=t=>$('msg').textContent=t;
 
 fetch('/status').then(r=>r.json()).then(s=>{
   $('resolution').value=s.art;
+  $('client_id').value=s.client_id;
   if(!s.ap){
     document.querySelectorAll('.sta-only').forEach(e=>e.hidden=false);
     if(s.spotify)msg('Spotify is connected.');
     fetch('/pkce').then(r=>r.json()).then(j=>challenge=j.challenge);
   }
+  const allowed=[...document.querySelectorAll('#tabs button:not([hidden])')].map(b=>b.dataset.go);
+  const wanted=location.hash.slice(1);
+  showTab(allowed.includes(wanted)?wanted:(s.ap?'wifi':(s.spotify?'playlists':'spotify')));
 });
+
+function showTab(name){
+  document.querySelectorAll('[data-tab]').forEach(e=>e.hidden=e.dataset.tab!==name);
+  document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('active',b.dataset.go===name));
+  history.replaceState(null,'','#'+name);
+  clearInterval(logTimer);
+  if(name==='debug'){loadLog();logTimer=setInterval(loadLog,3000);}
+  if(name==='playlists')ensurePlaylists();
+}
+document.querySelectorAll('#tabs button').forEach(b=>b.addEventListener('click',()=>showTab(b.dataset.go)));
 
 function login(){
   const id=$('client_id').value.trim();
@@ -123,7 +182,7 @@ function login(){
   if(!challenge){msg('Not ready yet, try again.');return;}
   const p=new URLSearchParams({client_id:id,response_type:'code',redirect_uri:'http://127.0.0.1:8080/callback',
     code_challenge_method:'S256',code_challenge:challenge,
-    scope:'user-read-playback-state user-modify-playback-state'});
+    scope:'user-read-playback-state user-modify-playback-state playlist-read-private'});
   window.open('https://accounts.spotify.com/authorize?'+p,'_blank');
 }
 
@@ -147,6 +206,202 @@ $('art-form').addEventListener('submit',async e=>{
   $('art-msg').textContent=r.ok?'Saved. The new size is used from the next poll.':await r.text();
 });
 
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let pinned=[];
+let allPlaylists=[];
+let playlistsLoaded=false;
+let loadingPlaylists=false;
+const CACHE_KEY='playlists-v2';
+let logTimer=null;
+
+function makeButton(text,onclick,disabled){
+  const b=document.createElement('button');
+  b.type='button';
+  b.textContent=text;
+  b.disabled=!!disabled;
+  b.addEventListener('click',onclick);
+  return b;
+}
+function makeRow(name){
+  const row=document.createElement('div');
+  row.className='pl';
+  const label=document.createElement('span');
+  label.textContent=name;
+  row.appendChild(label);
+  return row;
+}
+async function postForm(url,data){
+  return fetch(url,{method:'POST',body:new URLSearchParams(data)});
+}
+function renderPins(){
+  const box=$('pins');
+  box.textContent='';
+  if(!pinned.length){box.textContent='No pinned playlists yet.';return;}
+  pinned.forEach((p,i)=>{
+    const row=makeRow(p.name);
+    if(i>0)row.appendChild(makeButton('Up',async()=>{await postForm('/pin-up',{id:p.id});loadPins();}));
+    row.appendChild(makeButton('Rename',async()=>{
+      const name=prompt('Name for this playlist',p.name);
+      if(name&&name.trim()){await postForm('/pin-rename',{id:p.id,name:name.trim()});loadPins();}
+    }));
+    row.appendChild(makeButton('Remove',async()=>{await postForm('/pin-remove',{id:p.id});loadPins();}));
+    box.appendChild(row);
+  });
+}
+function renderResults(){
+  const box=$('pl-results');
+  box.textContent='';
+  const q=$('pl-search').value.trim().toLowerCase();
+  const ids=new Set(pinned.map(p=>p.id));
+  allPlaylists.filter(p=>!q||p.name.toLowerCase().includes(q)||(p.owner||'').toLowerCase().includes(q)).slice(0,60).forEach(p=>{
+    const row=makeRow(p.owner?p.name+' - '+p.owner:p.name);
+    const isPinned=ids.has(p.id);
+    row.appendChild(makeButton(isPinned?'Pinned':'Pin',async()=>{
+      const r=await postForm('/pin-add',{id:p.id,name:p.name});
+      if(!r.ok)$('pl-progress').textContent=await r.text();
+      loadPins();
+    },isPinned));
+    box.appendChild(row);
+  });
+}
+async function loadPins(){
+  const j=await (await fetch('/api/pins')).json();
+  pinned=j.pins;
+  renderPins();
+  renderResults();
+}
+async function pollWeb(url){
+  for(let tries=0;tries<40;tries++){
+    const j=await (await fetch(url+(tries===0?'&fresh=1':''))).json();
+    if(j.status==='ready')return j;
+    if(j.status==='error')throw new Error(j.error);
+    await sleep(700);
+  }
+  throw new Error('Timed out waiting for Spotify');
+}
+const fetchPage=offset=>pollWeb('/api/playlists?offset='+offset);
+
+function parsePlaylistId(text){
+  const m=text.match(/playlist[\/:]([A-Za-z0-9]{10,40})/);
+  if(m)return m[1];
+  const t=text.trim();
+  return /^[A-Za-z0-9]{10,40}$/.test(t)?t:null;
+}
+async function addById(){
+  const box=$('add-msg');
+  const id=parsePlaylistId($('add-id').value);
+  if(!id){box.textContent='Not a valid playlist URL or ID.';return;}
+  box.textContent='Looking up playlist...';
+  let name=$('add-name').value.trim();
+  let note='';
+  if(!name){
+    name='Playlist '+id.slice(0,6);
+    try{
+      const j=await pollWeb('/api/lookup?id='+id);
+      if(j.items.length&&j.items[0].name)name=j.items[0].name;
+    }catch(e){note=' (name not available from Spotify, use Rename to change it)';}
+  }
+  const r=await postForm('/pin-add',{id:id,name:name});
+  if(r.ok){
+    box.textContent='Pinned: '+name+note;
+    $('add-id').value='';
+    $('add-name').value='';
+    loadPins();
+  }else{
+    box.textContent=await r.text();
+  }
+}
+$('add-btn').addEventListener('click',addById);
+$('add-id').addEventListener('keydown',e=>{if(e.key==='Enter')addById();});
+
+let spQuery='',spNext=0;
+async function searchSpotify(more){
+  const box=$('sp-msg');
+  if(!more){
+    spQuery=$('sp-search').value.trim();
+    spNext=0;
+    $('sp-results').textContent='';
+    $('sp-more').hidden=true;
+  }
+  if(!spQuery)return;
+  box.textContent='Searching...';
+  try{
+    let j;
+    // Spotify returns null for restricted playlists, so a page can be empty while more exist.
+    for(let skips=0;skips<4;skips++){
+      j=await pollWeb('/api/search?q='+encodeURIComponent(spQuery)+'&offset='+spNext);
+      spNext=j.next;
+      if(j.items.length||j.next>=j.total)break;
+    }
+    const ids=new Set(pinned.map(p=>p.id));
+    j.items.forEach(p=>{
+      const row=makeRow(p.owner?p.name+' - '+p.owner:p.name);
+      row.appendChild(makeButton(ids.has(p.id)?'Pinned':'Pin',async e=>{
+        const r=await postForm('/pin-add',{id:p.id,name:p.name});
+        if(r.ok){e.target.textContent='Pinned';e.target.disabled=true;loadPins();}
+        else box.textContent=await r.text();
+      },ids.has(p.id)));
+      $('sp-results').appendChild(row);
+    });
+    spNext=j.next;
+    $('sp-more').hidden=!(j.next<j.total);
+    box.textContent=$('sp-results').children.length?'':'No playlists found.';
+  }catch(e){
+    box.textContent='Error: '+e.message;
+  }
+}
+$('sp-btn').addEventListener('click',()=>searchSpotify(false));
+$('sp-more').addEventListener('click',()=>searchSpotify(true));
+$('sp-search').addEventListener('keydown',e=>{if(e.key==='Enter')searchSpotify(false);});
+async function loadPlaylists(){
+  if(loadingPlaylists)return;
+  loadingPlaylists=true;
+  const btn=$('load-playlists');
+  const progress=$('pl-progress');
+  btn.disabled=true;
+  allPlaylists=[];
+  let complete=false;
+  try{
+    let offset=0,total=1;
+    while(offset<total){
+      const page=await fetchPage(offset);
+      allPlaylists.push(...page.items);
+      total=page.total;
+      progress.textContent='Loaded '+allPlaylists.length+' of '+total;
+      renderResults();
+      if(page.next<=offset)break;
+      offset=page.next;
+    }
+    complete=true;
+    progress.textContent=allPlaylists.length+' playlists loaded.';
+  }catch(e){
+    progress.textContent='Error: '+e.message;
+  }
+  if(complete){
+    playlistsLoaded=true;
+    try{localStorage.setItem(CACHE_KEY,JSON.stringify({time:Date.now(),items:allPlaylists}));}catch(e){}
+  }
+  btn.disabled=false;
+  loadingPlaylists=false;
+}
+async function ensurePlaylists(){
+  if(playlistsLoaded||loadingPlaylists)return;
+  try{
+    const c=JSON.parse(localStorage.getItem(CACHE_KEY));
+    if(c&&Array.isArray(c.items)){
+      allPlaylists=c.items;
+      playlistsLoaded=true;
+      $('pl-progress').textContent=allPlaylists.length+' playlists (cached '+new Date(c.time).toLocaleString()+')';
+      renderResults();
+      return;
+    }
+  }catch(e){}
+  await loadPlaylists();
+}
+$('load-playlists').addEventListener('click',loadPlaylists);
+$('pl-search').addEventListener('input',renderResults);
+loadPins();
+
 async function loadLog(){
   const j=await (await fetch('/log')).json();
   $('debug').checked=j.debug;
@@ -161,7 +416,6 @@ async function loadLog(){
     box.appendChild(line);
   }
 }
-let logTimer=null;
 let logText='';
 $('copy-log').addEventListener('click',async()=>{
   let ok=false;
@@ -183,10 +437,6 @@ $('copy-log').addEventListener('click',async()=>{
   b.textContent=ok?'Copied':'Copy failed';
   setTimeout(()=>b.textContent='Copy',1500);
 });
-$('log-section').addEventListener('toggle',()=>{
-  clearInterval(logTimer);
-  if($('log-section').open){loadLog();logTimer=setInterval(loadLog,3000);}
-});
 $('debug').addEventListener('change',async e=>{
   await fetch('/debug',{method:'POST',body:new URLSearchParams({enabled:e.target.checked?'1':'0'})});
 });
@@ -195,6 +445,34 @@ $('clear-log').addEventListener('click',async()=>{await fetch('/log-clear',{meth
 )rawliteral";
 
 AsyncWebServer server(80);
+
+struct PagePart {
+    const char *data;
+    size_t length;
+};
+
+// Streams the page straight from flash so the 13 KB document is never copied into heap.
+size_t indexChunk(uint8_t *buffer, size_t maxLen, size_t index) {
+    static const PagePart parts[] = {
+        {PAGE_TOP, sizeof(PAGE_TOP) - 1},
+        {INDEX_BODY, sizeof(INDEX_BODY) - 1},
+        {PAGE_BOTTOM, sizeof(PAGE_BOTTOM) - 1},
+    };
+    size_t pos = index;
+    size_t written = 0;
+    for (const PagePart &part : parts) {
+        if (pos >= part.length) {
+            pos -= part.length;
+            continue;
+        }
+        size_t n = min(maxLen - written, part.length - pos);
+        memcpy(buffer + written, part.data + pos, n);
+        written += n;
+        pos = 0;
+        if (written == maxLen) break;
+    }
+    return written;
+}
 
 String verifier;
 String pendingCode;
@@ -263,6 +541,7 @@ void handleStatus(AsyncWebServerRequest *request) {
     doc["busy"] = busy.load();
     doc["spotify"] = g_config.refreshToken.length() > 0;
     doc["art"] = g_config.artSize;
+    doc["client_id"] = g_config.clientId;
     doc["error"] = lastError;
     String out;
     serializeJson(doc, out);
@@ -314,6 +593,145 @@ void handleLogClear(AsyncWebServerRequest *request) {
     request->send(200, "text/plain", "OK");
 }
 
+void handlePins(AsyncWebServerRequest *request) {
+    JsonDocument doc;
+    JsonArray pins = doc["pins"].to<JsonArray>();
+    for (const Pin &pin : config_get_pins()) {
+        JsonObject o = pins.add<JsonObject>();
+        o["id"] = pin.id;
+        o["name"] = pin.name;
+    }
+    String out;
+    serializeJson(doc, out);
+    request->send(200, "application/json", out);
+}
+
+bool pinIdParam(AsyncWebServerRequest *request, String &id) {
+    if (!request->hasParam("id", true)) return false;
+    id = request->getParam("id", true)->value();
+    return isSafeToken(id, 40);
+}
+
+void handlePinAdd(AsyncWebServerRequest *request) {
+    String id;
+    if (!pinIdParam(request, id) || !request->hasParam("name", true)) {
+        request->send(400, "text/plain", "Invalid playlist.");
+        return;
+    }
+    String name = request->getParam("name", true)->value();
+    name.trim();
+    if (name.length() > 80) name = name.substring(0, 80);
+    if (!config_add_pin(id, name)) {
+        request->send(409, "text/plain", "Pin limit reached (" + String(MAX_PINS) + "). Remove one first.");
+        return;
+    }
+    request->send(200, "text/plain", "OK");
+}
+
+void handlePinRemove(AsyncWebServerRequest *request) {
+    String id;
+    if (!pinIdParam(request, id)) {
+        request->send(400, "text/plain", "Invalid playlist.");
+        return;
+    }
+    config_remove_pin(id);
+    request->send(200, "text/plain", "OK");
+}
+
+void handlePinRename(AsyncWebServerRequest *request) {
+    String id;
+    if (!pinIdParam(request, id) || !request->hasParam("name", true)) {
+        request->send(400, "text/plain", "Invalid playlist.");
+        return;
+    }
+    String name = request->getParam("name", true)->value();
+    name.trim();
+    if (name.isEmpty()) {
+        request->send(400, "text/plain", "Name cannot be empty.");
+        return;
+    }
+    if (name.length() > 80) name = name.substring(0, 80);
+    config_rename_pin(id, name);
+    request->send(200, "text/plain", "OK");
+}
+
+void handlePinUp(AsyncWebServerRequest *request) {
+    String id;
+    if (!pinIdParam(request, id)) {
+        request->send(400, "text/plain", "Invalid playlist.");
+        return;
+    }
+    config_move_pin_up(id);
+    request->send(200, "text/plain", "OK");
+}
+
+void respondWebList(AsyncWebServerRequest *request, ListKind kind, uint32_t offset, const String &query) {
+    JsonDocument doc;
+    if (g_config.refreshToken.isEmpty()) {
+        doc["status"] = "error";
+        doc["error"] = "Spotify is not connected.";
+    } else {
+        String key = String(offset) + ":" + query;
+        bool fresh = request->hasParam("fresh");
+
+        ListData data;
+        spotify_get_list(kind, data);
+        bool same = data.key == key;
+        if (same && data.status == LIST_LOADING) {
+            doc["status"] = "loading";
+        } else if (same && !fresh && (data.status == LIST_READY || data.status == LIST_ERROR)) {
+            if (data.status == LIST_READY) {
+                doc["status"] = "ready";
+                doc["next"] = data.next;
+                doc["total"] = data.total;
+                JsonArray items = doc["items"].to<JsonArray>();
+                for (const ListItem &item : data.items) {
+                    JsonObject o = items.add<JsonObject>();
+                    o["id"] = item.id;
+                    o["name"] = item.name;
+                    o["owner"] = item.owner;
+                }
+            } else {
+                doc["status"] = "error";
+                doc["error"] = data.error;
+            }
+        } else {
+            spotify_request_list(kind, offset, query);
+            doc["status"] = "loading";
+        }
+    }
+    String out;
+    serializeJson(doc, out);
+    request->send(200, "application/json", out);
+}
+
+uint32_t offsetParam(AsyncWebServerRequest *request, long maxValue) {
+    return request->hasParam("offset") ? (uint32_t)constrain(request->getParam("offset")->value().toInt(), 0, maxValue) : 0;
+}
+
+void handleWebPlaylists(AsyncWebServerRequest *request) {
+    respondWebList(request, LIST_WEB_PLAYLISTS, offsetParam(request, 100000), "");
+}
+
+void handleLookup(AsyncWebServerRequest *request) {
+    String id = request->hasParam("id") ? request->getParam("id")->value() : "";
+    if (!isSafeToken(id, 40)) {
+        request->send(400, "text/plain", "Invalid playlist ID.");
+        return;
+    }
+    respondWebList(request, LIST_WEB_LOOKUP, 0, id);
+}
+
+void handleSearch(AsyncWebServerRequest *request) {
+    String q = request->hasParam("q") ? request->getParam("q")->value() : "";
+    q.trim();
+    if (q.isEmpty() || q.length() > 50) {
+        request->send(400, "text/plain", "Search text must be 1-50 characters.");
+        return;
+    }
+    respondWebList(request, LIST_WEB_SEARCH, offsetParam(request, 1000), q);
+}
+
 void handleSaveArt(AsyncWebServerRequest *request) {
     int art = request->hasParam("resolution", true) ? request->getParam("resolution", true)->value().toInt() : 0;
     if (art != 64 && art != 300 && art != 640) {
@@ -363,11 +781,21 @@ void handleSaveSpotify(AsyncWebServerRequest *request) {
 } // namespace
 
 void web_portal_begin() {
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) { request->send(200, "text/html", page(INDEX_BODY)); });
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(request->beginChunkedResponse("text/html", indexChunk));
+    });
     server.on("/status", HTTP_GET, handleStatus);
     server.on("/pkce", HTTP_GET, handlePkce);
     server.on("/save-wifi", HTTP_POST, handleSaveWifi);
     server.on("/save-art", HTTP_POST, handleSaveArt);
+    server.on("/api/pins", HTTP_GET, handlePins);
+    server.on("/api/playlists", HTTP_GET, handleWebPlaylists);
+    server.on("/api/lookup", HTTP_GET, handleLookup);
+    server.on("/api/search", HTTP_GET, handleSearch);
+    server.on("/pin-add", HTTP_POST, handlePinAdd);
+    server.on("/pin-remove", HTTP_POST, handlePinRemove);
+    server.on("/pin-up", HTTP_POST, handlePinUp);
+    server.on("/pin-rename", HTTP_POST, handlePinRename);
     server.on("/log", HTTP_GET, handleLog);
     server.on("/debug", HTTP_POST, handleDebug);
     server.on("/log-clear", HTTP_POST, handleLogClear);

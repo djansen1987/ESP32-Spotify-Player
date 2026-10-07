@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 void ui_init();
+void ui_set_info_provider(String (*provider)());
 void show_setup_screen();
 void update_setup_screen(const char *ip_address, bool is_ap_mode);
 void ui_set_setup_status(const char *text);

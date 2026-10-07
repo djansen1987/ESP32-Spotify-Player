@@ -70,5 +70,6 @@ void display_init() {
     lv_indev_drv_init(&indevDrv);
     indevDrv.type = LV_INDEV_TYPE_POINTER;
     indevDrv.read_cb = touchReadCb;
+    indevDrv.long_press_time = 700;
     lv_indev_drv_register(&indevDrv);
 }
