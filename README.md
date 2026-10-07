@@ -1,4 +1,4 @@
-[![Build firmware](https://github.com/djansen1987/ESP32-Spotify-Player/actions/workflows/build.yml/badge.svg)](https://github.com/djansen1987/ESP32-Spotify-Player/actions/workflows/build.yml)
+[![Build firmware](https://github.com/djansen1987/ESP32-Spotify-Player/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/djansen1987/ESP32-Spotify-Player/actions/workflows/build.yml)
 
 # ESP32 Spotify Player
 
