@@ -1,3 +1,5 @@
+[![Build firmware](https://github.com/djansen1987/ESP32-Spotify-Player/actions/workflows/build.yml/badge.svg)](https://github.com/djansen1987/ESP32-Spotify-Player/actions/workflows/build.yml)
+
 # ESP32 Spotify Player
 
 A standalone Spotify remote with a touch screen for the **ESP32-2432S028R** ("Cheap Yellow Display", CYD). It shows what is playing on any of your Spotify devices and lets you control it: play/pause, skip, seek, volume, switch device and start playlists. The album art is used as a blurred full-screen background.
