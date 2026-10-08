@@ -68,14 +68,14 @@ Use Chrome or Edge on a desktop computer (Web Serial is required) and connect th
 
 1. Press **Connect** and select the serial port of the board (CH340).
 2. Set **Flash Address** to `0x0` and choose `firmware-merged.bin` as the file.
-3. Press **Program** and wait until it reports 100%. Press the reset button on the board afterwards.
+3. Press **Program** and wait until it reports 100%.
+4. **Unplug the USB cable and plug it in again** to start the firmware (see the note below).
 
-**ESPHome Web** (<https://web.esphome.io>):
+Important notes:
 
-1. Press **Connect** and select the serial port.
-2. Choose **Install**, select `firmware-merged.bin` and confirm. The image already contains the bootloader, so it is written as a full image.
-
-If the board is not listed, install the CH340 USB driver. If flashing does not start, hold the BOOT button while pressing Connect.
+- The address must be `0x0`. The merged image already contains the bootloader (normally at `0x1000`), so flashing it at `0x1000` shifts everything and the screen stays black. esptool-js then warns `Image file at 0x1000 doesn't look like an image file`.
+- On this board the automatic "Hard resetting via RTS pin" after flashing does not restart the chip, and the RST button on the back does not either. After flashing, power-cycle the board by reconnecting USB.
+- If the board is not listed, install the CH340 USB driver. If flashing does not start, hold the BOOT button while pressing Connect.
 
 #### Flash with esptool
 
@@ -189,6 +189,7 @@ The PKCE challenge is generated on the ESP32 and only the refresh token is store
 
 ## Troubleshooting
 
+- Black screen after flashing: check that the merged image was written at `0x0` (not `0x1000`), then unplug and replug the USB cable. A reset via RTS or the RST button may not restart this board.
 - Open the **Debug** tab, enable *Verbose logging* and use *Copy* to share the log. Entries show HTTP status codes, timing and free heap.
 - After an unexpected restart the log starts with the reset reason (panic, watchdog, brownout). A weak USB supply can cause brownouts.
 - Nothing playing or "No active device": start playback once in the Spotify app, then pick the device from the device list.
