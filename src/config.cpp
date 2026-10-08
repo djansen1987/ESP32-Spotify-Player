@@ -2,6 +2,7 @@
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <algorithm>
+#include <mbedtls/sha256.h>
 
 static const char *CONFIG_PATH = "/config.json";
 
@@ -47,6 +48,8 @@ void config_load() {
     g_config.artSize = doc["art_size"] | 300;
     g_config.ledBrightness = constrain((int)(doc["led_brightness"] | 40), 0, 100);
     g_config.refreshToken = doc["refresh_token"] | "";
+    g_config.webPassHash = doc["web_pass_hash"] | "";
+    g_config.webPassSalt = doc["web_pass_salt"] | "";
 
     g_config.pins.clear();
     for (JsonObject o : doc["pins"].as<JsonArray>()) {
@@ -71,6 +74,8 @@ bool config_save() {
     doc["art_size"] = g_config.artSize;
     doc["led_brightness"] = g_config.ledBrightness;
     doc["refresh_token"] = g_config.refreshToken;
+    doc["web_pass_hash"] = g_config.webPassHash;
+    doc["web_pass_salt"] = g_config.webPassSalt;
     JsonArray pins = doc["pins"].to<JsonArray>();
     for (const Pin &pin : g_config.pins) {
         JsonObject o = pins.add<JsonObject>();
@@ -83,6 +88,46 @@ bool config_save() {
     serializeJson(doc, file);
     file.close();
     return true;
+}
+
+static String hashPassword(const String &salt, const String &password) {
+    String input = salt + password;
+    uint8_t digest[32];
+    mbedtls_sha256((const unsigned char *)input.c_str(), input.length(), digest, 0);
+    char hex[65];
+    for (int i = 0; i < 32; i++) snprintf(hex + i * 2, 3, "%02x", digest[i]);
+    return String(hex);
+}
+
+bool config_web_password_set() {
+    ScopedLock lock;
+    return g_config.webPassHash.length() > 0;
+}
+
+void config_set_web_password(const String &password) {
+    ScopedLock lock;
+    char salt[17];
+    snprintf(salt, sizeof(salt), "%08x%08x", (unsigned)esp_random(), (unsigned)esp_random());
+    g_config.webPassSalt = salt;
+    g_config.webPassHash = hashPassword(g_config.webPassSalt, password);
+    config_save();
+}
+
+void config_clear_web_password() {
+    ScopedLock lock;
+    g_config.webPassHash = "";
+    g_config.webPassSalt = "";
+    config_save();
+}
+
+bool config_check_web_password(const String &password) {
+    ScopedLock lock;
+    if (g_config.webPassHash.isEmpty()) return true;
+    String candidate = hashPassword(g_config.webPassSalt, password);
+    if (candidate.length() != g_config.webPassHash.length()) return false;
+    uint8_t diff = 0;
+    for (size_t i = 0; i < candidate.length(); i++) diff |= candidate[i] ^ g_config.webPassHash[i];
+    return diff == 0;
 }
 
 std::vector<WifiNet> config_get_networks() {

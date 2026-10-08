@@ -8,6 +8,7 @@
 #include <WiFi.h>
 #include <atomic>
 #include <mbedtls/sha256.h>
+#include <mbedtls/base64.h>
 
 namespace {
 
@@ -66,6 +67,7 @@ const char INDEX_BODY[] PROGMEM = R"rawliteral(
 <button type="button" data-go="spotify" class="sta-only" hidden>Spotify</button>
 <button type="button" data-go="playlists" class="sta-only" hidden>Playlists</button>
 <button type="button" data-go="debug">Debug</button>
+<button type="button" data-go="security">Security</button>
 </nav>
 
 <div class="section" data-tab="wifi" hidden>
@@ -155,6 +157,20 @@ const char INDEX_BODY[] PROGMEM = R"rawliteral(
 <div id="pl-results"></div>
 </div>
 
+<div class="section" data-tab="security" hidden>
+<h3>Web password</h3>
+<span class="hint" id="pw-hint"></span>
+<form id="pw-form">
+<label for="pw1">New password (4-64 characters)</label>
+<input type="password" id="pw1" minlength="4" maxlength="64" autocomplete="new-password" required>
+<label for="pw2">Repeat password</label>
+<input type="password" id="pw2" minlength="4" maxlength="64" autocomplete="new-password" required>
+<button type="submit">Set password</button>
+</form>
+<button type="button" class="small" id="pw-clear" style="margin-top:12px" hidden>Remove password</button>
+<div class="msg" id="pw-msg"></div>
+</div>
+
 <div class="section" data-tab="debug" hidden>
 <h3>Debug Log</h3>
 <div class="row">
@@ -175,6 +191,11 @@ fetch('/status').then(r=>r.json()).then(s=>{
   $('led').value=s.led;
   $('led-val').textContent=s.led;
   $('client_id').value=s.client_id;
+  $('pw-hint').textContent=s.protected
+    ?'This device is password protected. Your browser asks for it; the username can be anything, for example admin. Forgot it? Hold the BOOT button on the board for 3 seconds.'
+    :'No password is set: anyone on your network can change these settings.';
+  $('pw-clear').hidden=!s.protected;
+  $('pw1').required=true;
   if(!s.ap){
     document.querySelectorAll('.sta-only').forEach(e=>e.hidden=false);
     if(s.spotify)msg('Spotify is connected.');
@@ -236,6 +257,20 @@ $('led').addEventListener('input',e=>{
 $('led').addEventListener('change',e=>{
   clearTimeout(ledTimer);
   postForm('/save-led',{value:e.target.value,save:'1'});
+});
+$('pw-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const box=$('pw-msg');
+  if($('pw1').value!==$('pw2').value){box.textContent='The passwords do not match.';return;}
+  const r=await postForm('/save-password',{password:$('pw1').value});
+  if(!r.ok){box.textContent=await r.text();return;}
+  box.textContent='Password set. Your browser will now ask for it.';
+  setTimeout(()=>location.reload(),1200);
+});
+$('pw-clear').addEventListener('click',async()=>{
+  if(!confirm('Remove the web password? Anyone on your network can then change the settings.'))return;
+  await postForm('/clear-password',{});
+  setTimeout(()=>location.reload(),600);
 });
 $('wifi-reset').addEventListener('click',async()=>{
   if(!confirm('Forget all saved networks and restart in setup mode?'))return;
@@ -596,6 +631,7 @@ void handleStatus(AsyncWebServerRequest *request) {
     doc["art"] = g_config.artSize;
     doc["led"] = g_config.ledBrightness;
     doc["client_id"] = g_config.clientId;
+    doc["protected"] = config_web_password_set();
     doc["ssid"] = WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String();
     doc["error"] = lastError;
     String out;
@@ -830,6 +866,68 @@ void handleSaveLed(AsyncWebServerRequest *request) {
     request->send(200, "text/plain", "OK");
 }
 
+void handleSavePassword(AsyncWebServerRequest *request) {
+    String password = request->hasParam("password", true) ? request->getParam("password", true)->value() : "";
+    if (password.length() < 4 || password.length() > 64) {
+        request->send(400, "text/plain", "The password must be 4-64 characters.");
+        return;
+    }
+    config_set_web_password(password);
+    request->send(200, "text/plain", "OK");
+}
+
+void handleClearPassword(AsyncWebServerRequest *request) {
+    config_clear_web_password();
+    request->send(200, "text/plain", "OK");
+}
+
+uint8_t authFailures = 0;
+uint32_t authWindowStart = 0;
+uint32_t authLockedUntil = 0;
+
+// HTTP Basic auth: any username, the stored password is checked.
+void requirePassword(AsyncWebServerRequest *request, ArMiddlewareNext next) {
+    if (!config_web_password_set()) {
+        next();
+        return;
+    }
+    if ((int32_t)(millis() - authLockedUntil) < 0) {
+        request->send(429, "text/plain", "Too many attempts. Try again in a few seconds.");
+        return;
+    }
+
+    bool hasHeader = request->hasHeader("Authorization");
+    if (hasHeader) {
+        String header = request->header("Authorization");
+        if (header.startsWith("Basic ")) {
+            String encoded = header.substring(6);
+            unsigned char decoded[128];
+            size_t length = 0;
+            if (encoded.length() < 160 &&
+                mbedtls_base64_decode(decoded, sizeof(decoded) - 1, &length, (const unsigned char *)encoded.c_str(), encoded.length()) == 0) {
+                decoded[length] = 0;
+                const char *colon = strchr((const char *)decoded, ':');
+                if (colon && config_check_web_password(String(colon + 1))) {
+                    authFailures = 0;
+                    next();
+                    return;
+                }
+            }
+        }
+        // A browser fires several requests at once, so only a burst of failures counts as guessing.
+        uint32_t now = millis();
+        if (authFailures == 0 || now - authWindowStart > 10000) {
+            authFailures = 0;
+            authWindowStart = now;
+        }
+        if (++authFailures > 12) {
+            authFailures = 0;
+            authLockedUntil = now + 30000;
+        }
+    }
+    request->requestAuthentication(AsyncAuthType::AUTH_BASIC, "Spotify Player");
+}
+
 void handleSaveArt(AsyncWebServerRequest *request) {
     int art = request->hasParam("resolution", true) ? request->getParam("resolution", true)->value().toInt() : 0;
     if (art != 64 && art != 300 && art != 640) {
@@ -879,6 +977,7 @@ void handleSaveSpotify(AsyncWebServerRequest *request) {
 } // namespace
 
 void web_portal_begin() {
+    server.addMiddleware(requirePassword);
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
         request->send(request->beginChunkedResponse("text/html", indexChunk));
     });
@@ -889,6 +988,8 @@ void web_portal_begin() {
     server.on("/wifi-remove", HTTP_POST, handleWifiRemove);
     server.on("/api/wifi", HTTP_GET, handleApiWifi);
     server.on("/save-art", HTTP_POST, handleSaveArt);
+    server.on("/save-password", HTTP_POST, handleSavePassword);
+    server.on("/clear-password", HTTP_POST, handleClearPassword);
     server.on("/save-led", HTTP_POST, handleSaveLed);
     server.on("/api/pins", HTTP_GET, handlePins);
     server.on("/api/playlists", HTTP_GET, handleWebPlaylists);

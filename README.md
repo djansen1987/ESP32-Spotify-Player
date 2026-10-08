@@ -21,6 +21,7 @@ The ESP32 does not play audio itself. It controls an existing Spotify Connect de
   - **Spotify**: client ID, login (PKCE, no client secret needed) and album art resolution.
   - **Playlists**: pin playlists by searching your library, searching all of Spotify, or pasting a playlist URL/ID. Pins can be renamed and reordered.
   - **Debug**: in-browser log with verbose mode and a copy button. Logs are only kept in RAM and shown in the browser.
+  - **Security**: optional password for the web interface (none by default).
 - Characters outside the built-in font (emoji, CJK) are dropped instead of drawn as boxes. Latin, Cyrillic, Greek and common symbols are supported.
 
 ## Hardware
@@ -113,10 +114,19 @@ Manage the saved networks on the **Wi-Fi** tab of the web interface, in setup mo
 If the current network has no working internet, the screen shows "No internet. Long-press the screen to forget this Wi-Fi." and the device also starts the `Spotify-Player-Setup` access point next to the normal connection after about 2 minutes. To leave the network you can:
 
 - **On the device:** long-press the screen to open the device info popup and tap **Forget Wi-Fi** twice (the second tap confirms). This forgets only the connected network; the device then restarts and joins another saved network, or starts setup mode if there is none.
-- **BOOT button:** hold the BOOT button on the back of the board for 3 seconds (same as above).
+- **BOOT button:** hold the BOOT button on the back of the board for 3 seconds. This forgets the connected network (as above) **and removes the web password**, so it is also the way back in when you forgot the password.
 - **Web interface:** on the Wi-Fi tab use **Forget & disconnect** next to the connected network, or **Forget all & restart in setup mode**.
 
 Forgetting a network removes only Wi-Fi credentials. Your Spotify login, pins and settings are kept.
+
+#### Protecting the web interface with a password
+
+Out of the box the web interface has no password. To add one, open the **Security** tab, enter a password (4-64 characters) twice and press **Set password**. The browser then asks for a login: the username can be anything (for example `admin`), the password is the one you set. Use the same tab to change or remove it.
+
+- The password protects every page and endpoint, including setup mode on the `Spotify-Player-Setup` access point.
+- It is stored as a salted SHA-256 hash, never as plain text. After a burst of wrong attempts the device temporarily answers with "Too many attempts" for 30 seconds.
+- Forgot it? Hold the BOOT button for 3 seconds (this also forgets the connected Wi-Fi network).
+- The login uses HTTP Basic authentication over plain HTTP, so the password is sent unencrypted on your network. It keeps casual users and other devices out; it does not protect against someone sniffing your Wi-Fi traffic.
 
 ### 2. Create a Spotify app
 
@@ -159,7 +169,7 @@ The PKCE challenge is generated on the ESP32 and only the refresh token is store
 - The Web API has no composer or credits data, and popularity and label fields were removed in 2026.
 - Memory is tight on the ESP32 without PSRAM. The firmware keeps a single TLS connection to Spotify, retries failed connections, and streams large responses through temporary flash files. If you see `connection refused` in the debug log, it was a TLS memory allocation failure that is retried automatically.
 - TLS certificates are **not verified** (`setInsecure()`). Anyone able to intercept your traffic could read the access token. Pin the Spotify root certificate if you need protection against that.
-- The setup access point is open and the web interface has no password. Use it on a network you trust.
+- The setup access point is open, and the web interface has no password until you set one on the **Security** tab. Even with a password, the connection is plain HTTP (no encryption), so use it on a network you trust.
 
 ## Troubleshooting
 
@@ -167,6 +177,7 @@ The PKCE challenge is generated on the ESP32 and only the refresh token is store
 - After an unexpected restart the log starts with the reset reason (panic, watchdog, brownout). A weak USB supply can cause brownouts.
 - Nothing playing or "No active device": start playback once in the Spotify app, then pick the device from the device list.
 - Insufficient permission when loading playlists: log in again on the Spotify tab.
+- Locked out of the web interface: use any username with the password. If you forgot it, hold the BOOT button for 3 seconds to remove the password (this also forgets the connected Wi-Fi network).
 
 ## Project layout
 

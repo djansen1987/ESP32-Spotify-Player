@@ -39,6 +39,7 @@ static uint32_t apStartedAt = 0;
 static uint32_t lastTick = 0;
 static uint32_t lastHeapCheck = 0;
 static volatile bool resetRequested = false;
+static volatile bool passwordResetRequested = false;
 static bool rescueAp = false;
 static uint32_t offlineSince = 0;
 static uint32_t bootHeldSince = 0;
@@ -239,6 +240,8 @@ static void requestWifiReset() { resetRequested = true; }
 
 static void handleWifiReset() {
     if (!resetRequested) return;
+    bool clearPassword = passwordResetRequested;
+    if (clearPassword) config_clear_web_password();
     String current = WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String();
     if (current.length()) {
         config_remove_network(current);
@@ -246,7 +249,8 @@ static void handleWifiReset() {
         config_clear_networks();
     }
     show_setup_screen();
-    ui_set_setup_status(current.length() ? "Network forgotten.\nRestarting..." : "Wi-Fi settings cleared.\nRestarting in setup mode...");
+    ui_set_setup_status(clearPassword ? "Network forgotten and\nweb password removed.\nRestarting..."
+                                      : current.length() ? "Network forgotten.\nRestarting..." : "Wi-Fi settings cleared.\nRestarting in setup mode...");
     for (int i = 0; i < 30; i++) {
         lv_timer_handler();
         delay(30);
@@ -260,7 +264,10 @@ static void handleBootButton() {
         return;
     }
     if (!bootHeldSince) bootHeldSince = millis();
-    if (millis() - bootHeldSince > BOOT_HOLD_MS) resetRequested = true;
+    if (millis() - bootHeldSince > BOOT_HOLD_MS) {
+        passwordResetRequested = true;
+        resetRequested = true;
+    }
 }
 
 // A guest network with a captive portal connects but has no internet, so keep a setup AP reachable.
