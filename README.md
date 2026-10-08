@@ -2,6 +2,10 @@
 
 # ESP32 Spotify Player
 
+![ESP32 Spotify Player showing the now playing screen in a 3D-printed desk case](images/Player-closeup.jpeg)
+
+![The player in its case: now playing screen, device info popup and the full-screen album art background](images/Player-Collection.jpeg)
+
 A standalone Spotify remote with a touch screen for the **ESP32-2432S028R** ("Cheap Yellow Display", CYD). It shows what is playing on any of your Spotify devices and lets you control it: play/pause, skip, seek, volume, switch device and start playlists. The album art is used as a blurred full-screen background.
 
 The ESP32 does not play audio itself. It controls an existing Spotify Connect device (phone, computer, speaker) through the Spotify Web API.
@@ -24,6 +28,12 @@ The ESP32 does not play audio itself. It controls an existing Spotify Connect de
   - **Security**: optional password for the web interface (none by default).
 - Characters outside the built-in font (emoji, CJK) are dropped instead of drawn as boxes. Latin, Cyrillic, Greek and common symbols are supported.
 
+### Web interface
+
+The device setup pages work on a phone or computer: Wi-Fi (with known networks), Spotify login and album art, playlists, debug log and the optional web password.
+
+![Device setup web interface: Wi-Fi, Spotify, Playlists, Debug and Security pages](images/Device%20Setup.jpeg)
+
 ## Hardware
 
 Designed for the **ESP32-2432S028R** (ESP32-WROOM-32, 4 MB flash, no PSRAM, 2.8" 320x240 ILI9341 display, XPT2046 resistive touch, USB-to-serial CH340).
@@ -37,6 +47,12 @@ The pin configuration is set with build flags in [platformio.ini](platformio.ini
 | Touch CLK / MOSI / MISO / CS / IRQ | 25 / 32 / 39 / 33 / 36 |
 
 Board variants: some CYD boards use an ST7789 display instead (often the ones with two USB ports) and may need a different driver and display inversion (`ST7789_DRIVER`, `TFT_INVERSION_ON`). If colours look inverted on an ILI9341 board, add `-DTFT_INVERSION_ON` to `build_flags`. Touch orientation and calibration are in [src/display.cpp](src/display.cpp).
+
+### 3D-printed case
+
+The case in the photos is **[CYD Desk Buddy for Bambu Lab](https://makerworld.com/en/models/2787810-cyd-desk-buddy-for-bambu-lab-home-assistant#profileId-3099382)** by **[annaglyph](https://makerworld.com/en/@annaglyph)** on MakerWorld. It is a desk stand for the Cheap Yellow Display that leaves the touch screen and the BOOT button reachable.
+
+All credit for the model goes to annaglyph. The model files are not part of this repository; download them from the MakerWorld page, where the model's own licence and print settings also apply. This project is not affiliated with the case designer.
 
 ## Install
 
@@ -199,5 +215,7 @@ The fonts in `src/fonts` are generated with `lv_font_conv` from Montserrat and D
 ## Credits and licence
 
 Built with [LVGL](https://lvgl.io/), [TFT_eSPI](https://github.com/Bodmer/TFT_eSPI), [TJpg_Decoder](https://github.com/Bodmer/TJpg_Decoder), [ArduinoJson](https://arduinojson.org/), [ESPAsyncWebServer](https://github.com/ESP32Async/ESPAsyncWebServer) and [XPT2046_Touchscreen](https://github.com/PaulStoffregen/XPT2046_Touchscreen).
+
+Case: [CYD Desk Buddy for Bambu Lab](https://makerworld.com/en/models/2787810-cyd-desk-buddy-for-bambu-lab-home-assistant#profileId-3099382) by [annaglyph](https://makerworld.com/en/@annaglyph).
 
 Released under the GNU General Public License v3.0, see [LICENSE](LICENSE).
