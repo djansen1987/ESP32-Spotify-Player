@@ -6,6 +6,8 @@
 
 ![The player in its case: now playing screen, device info popup and the full-screen album art background](images/Player-Collection.jpeg)
 
+![The RGB LED on the back of the board changes colour with the album art, shown with a dark and a light cover](images/Player-Dark-Light.jpeg)
+
 A standalone Spotify remote with a touch screen for the **ESP32-2432S028R** ("Cheap Yellow Display", CYD). It shows what is playing on any of your Spotify devices and lets you control it: play/pause, skip, seek, volume, switch device and start playlists. The album art is used as a blurred full-screen background.
 
 The ESP32 does not play audio itself. It controls an existing Spotify Connect device (phone, computer, speaker) through the Spotify Web API.
@@ -20,9 +22,10 @@ The ESP32 does not play audio itself. It controls an existing Spotify Connect de
 - **Playlists**: pinned playlists are shown first, the rest can be loaded in pages of 50 ("Load more").
 - **Track details popup** (tap title or artist): album, release date, track number, length, explicit flag, ISRC.
 - **Device info popup** (long press anywhere): IP address, Wi-Fi signal, MAC, uptime, heap, Spotify status. Useful for troubleshooting.
+- **RGB LED ambient light**: the RGB LED on the back of the board fades to the accent colour of the current album art and turns off when nothing is playing. Brightness (0-100%, default 40, 0 = off) is set on the web interface.
 - Web interface for setup, with tabs:
   - **Wi-Fi**: network credentials.
-  - **Spotify**: client ID, login (PKCE, no client secret needed) and album art resolution.
+  - **Spotify**: client ID, login (PKCE, no client secret needed), album art resolution and RGB LED brightness.
   - **Playlists**: pin playlists by searching your library, searching all of Spotify, or pasting a playlist URL/ID. Pins can be renamed and reordered.
   - **Debug**: in-browser log with verbose mode and a copy button. Logs are only kept in RAM and shown in the browser.
   - **Security**: optional password for the web interface (none by default).
