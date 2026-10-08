@@ -82,5 +82,6 @@ bool spotify_art_begin_read();
 void spotify_art_end_read();
 bool spotify_auth_lost();
 uint32_t spotify_last_poll_ms();
+bool spotify_recently_ok(uint32_t withinMs);
 uint32_t spotify_list_version(ListKind kind);
 bool spotify_token_valid();

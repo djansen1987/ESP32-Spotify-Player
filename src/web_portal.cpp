@@ -1,6 +1,7 @@
 #include "web_portal.h"
 #include "app_log.h"
 #include "config.h"
+#include "led.h"
 #include "spotify.h"
 #include <ArduinoJson.h>
 #include <ESPAsyncWebServer.h>
@@ -68,7 +69,7 @@ const char INDEX_BODY[] PROGMEM = R"rawliteral(
 </nav>
 
 <div class="section" data-tab="wifi" hidden>
-<h3>Wi-Fi Settings</h3>
+<h3>Add a network</h3>
 <form action="/save-wifi" method="POST">
 <label for="ssid">Network Name (SSID)</label>
 <input type="text" id="ssid" name="ssid" required maxlength="32" autocapitalize="none" autocorrect="off">
@@ -76,6 +77,15 @@ const char INDEX_BODY[] PROGMEM = R"rawliteral(
 <input type="password" id="password" name="password" maxlength="63">
 <button type="submit">Save Wi-Fi &amp; Restart</button>
 </form>
+</div>
+
+<div class="section" data-tab="wifi" hidden>
+<h3>Known networks</h3>
+<span class="hint">The device tries these in order of last use and skips networks without internet. Networks you add are remembered.</span>
+<div id="wifi-list"></div>
+<div class="msg" id="wifi-warn"></div>
+<button type="button" class="small" id="wifi-reset" style="margin-top:12px">Forget all &amp; restart in setup mode</button>
+<div class="msg" id="wifi-msg"></div>
 </div>
 
 <div class="section" data-tab="spotify" hidden>
@@ -105,6 +115,13 @@ const char INDEX_BODY[] PROGMEM = R"rawliteral(
 <button type="submit">Save Album Art</button>
 </form>
 <div class="msg" id="art-msg"></div>
+</div>
+
+<div class="section" data-tab="spotify" hidden>
+<h3>RGB LED</h3>
+<span class="hint">The LED on the back of the board follows the colour of the album art. Set 0 to turn it off.</span>
+<label for="led">Brightness: <span id="led-val"></span>%</label>
+<input type="range" id="led" min="0" max="100" step="5" style="width:100%;accent-color:#1DB954">
 </div>
 
 <div class="section" data-tab="playlists" hidden>
@@ -155,6 +172,8 @@ const msg=t=>$('msg').textContent=t;
 
 fetch('/status').then(r=>r.json()).then(s=>{
   $('resolution').value=s.art;
+  $('led').value=s.led;
+  $('led-val').textContent=s.led;
   $('client_id').value=s.client_id;
   if(!s.ap){
     document.querySelectorAll('.sta-only').forEach(e=>e.hidden=false);
@@ -173,6 +192,7 @@ function showTab(name){
   clearInterval(logTimer);
   if(name==='debug'){loadLog();logTimer=setInterval(loadLog,3000);}
   if(name==='playlists')ensurePlaylists();
+  if(name==='wifi')loadWifi();
 }
 document.querySelectorAll('#tabs button').forEach(b=>b.addEventListener('click',()=>showTab(b.dataset.go)));
 
@@ -207,6 +227,39 @@ $('art-form').addEventListener('submit',async e=>{
 });
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let ledTimer=null;
+$('led').addEventListener('input',e=>{
+  $('led-val').textContent=e.target.value;
+  clearTimeout(ledTimer);
+  ledTimer=setTimeout(()=>postForm('/save-led',{value:e.target.value}),120);
+});
+$('led').addEventListener('change',e=>{
+  clearTimeout(ledTimer);
+  postForm('/save-led',{value:e.target.value,save:'1'});
+});
+$('wifi-reset').addEventListener('click',async()=>{
+  if(!confirm('Forget all saved networks and restart in setup mode?'))return;
+  await postForm('/wifi-reset',{});
+  $('wifi-msg').textContent='Restarting. Connect to the Spotify-Player-Setup network and open http://192.168.4.1';
+});
+async function loadWifi(){
+  const j=await (await fetch('/api/wifi')).json();
+  const box=$('wifi-list');
+  box.textContent='';
+  if(!j.networks.length)box.textContent='No saved networks.';
+  j.networks.forEach(n=>{
+    const isCurrent=n.ssid===j.current;
+    const row=makeRow(n.ssid+(isCurrent?(j.internet?' (connected)':' (connected, no internet)'):''));
+    row.appendChild(makeButton(isCurrent?'Forget & disconnect':'Remove',async()=>{
+      if(!confirm((isCurrent?'Forget and disconnect from ':'Remove ')+n.ssid+'?'))return;
+      await postForm('/wifi-remove',{ssid:n.ssid});
+      if(isCurrent)$('wifi-msg').textContent='Restarting. The device joins another saved network or starts the Spotify-Player-Setup network.';
+      else loadWifi();
+    }));
+    box.appendChild(row);
+  });
+  $('wifi-warn').textContent=(j.current&&!j.internet)?'Connected to '+j.current+' but there is no internet access. Forget it to move on to another network.':'';
+}
 let pinned=[];
 let allPlaylists=[];
 let playlistsLoaded=false;
@@ -541,7 +594,9 @@ void handleStatus(AsyncWebServerRequest *request) {
     doc["busy"] = busy.load();
     doc["spotify"] = g_config.refreshToken.length() > 0;
     doc["art"] = g_config.artSize;
+    doc["led"] = g_config.ledBrightness;
     doc["client_id"] = g_config.clientId;
+    doc["ssid"] = WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String();
     doc["error"] = lastError;
     String out;
     serializeJson(doc, out);
@@ -560,14 +615,45 @@ void handlePkce(AsyncWebServerRequest *request) {
     request->send(200, "application/json", out);
 }
 
+void handleWifiReset(AsyncWebServerRequest *request) {
+    config_clear_networks();
+    request->send(200, "text/plain", "OK");
+    restartAt = millis() + 1500;
+}
+
+void handleApiWifi(AsyncWebServerRequest *request) {
+    JsonDocument doc;
+    bool connected = WiFi.status() == WL_CONNECTED;
+    doc["current"] = connected ? WiFi.SSID() : String();
+    doc["internet"] = g_internetOk;
+    JsonArray networks = doc["networks"].to<JsonArray>();
+    for (const WifiNet &net : config_get_networks()) {
+        JsonObject o = networks.add<JsonObject>();
+        o["ssid"] = net.ssid;
+    }
+    String out;
+    serializeJson(doc, out);
+    request->send(200, "application/json", out);
+}
+
+void handleWifiRemove(AsyncWebServerRequest *request) {
+    if (!request->hasParam("ssid", true)) {
+        request->send(400, "text/plain", "SSID is missing.");
+        return;
+    }
+    String ssid = request->getParam("ssid", true)->value();
+    bool wasCurrent = WiFi.status() == WL_CONNECTED && WiFi.SSID() == ssid;
+    config_remove_network(ssid);
+    request->send(200, "text/plain", "OK");
+    if (wasCurrent) restartAt = millis() + 1500;
+}
+
 void handleSaveWifi(AsyncWebServerRequest *request) {
     if (!request->hasParam("ssid", true) || request->getParam("ssid", true)->value().isEmpty()) {
         request->send(400, "text/plain", "SSID is missing.");
         return;
     }
-    g_config.ssid = request->getParam("ssid", true)->value();
-    g_config.pass = request->hasParam("password", true) ? request->getParam("password", true)->value() : "";
-    config_save();
+    config_add_network(request->getParam("ssid", true)->value(), request->hasParam("password", true) ? request->getParam("password", true)->value() : "");
 
     static const char body[] PROGMEM =
         "<h2>Wi-Fi saved</h2>"
@@ -732,6 +818,18 @@ void handleSearch(AsyncWebServerRequest *request) {
     respondWebList(request, LIST_WEB_SEARCH, offsetParam(request, 1000), q);
 }
 
+void handleSaveLed(AsyncWebServerRequest *request) {
+    if (!request->hasParam("value", true)) {
+        request->send(400, "text/plain", "Missing value.");
+        return;
+    }
+    int value = constrain(request->getParam("value", true)->value().toInt(), 0, 100);
+    g_config.ledBrightness = value;
+    led_set_brightness(value);
+    if (request->hasParam("save", true)) config_save();
+    request->send(200, "text/plain", "OK");
+}
+
 void handleSaveArt(AsyncWebServerRequest *request) {
     int art = request->hasParam("resolution", true) ? request->getParam("resolution", true)->value().toInt() : 0;
     if (art != 64 && art != 300 && art != 640) {
@@ -787,7 +885,11 @@ void web_portal_begin() {
     server.on("/status", HTTP_GET, handleStatus);
     server.on("/pkce", HTTP_GET, handlePkce);
     server.on("/save-wifi", HTTP_POST, handleSaveWifi);
+    server.on("/wifi-reset", HTTP_POST, handleWifiReset);
+    server.on("/wifi-remove", HTTP_POST, handleWifiRemove);
+    server.on("/api/wifi", HTTP_GET, handleApiWifi);
     server.on("/save-art", HTTP_POST, handleSaveArt);
+    server.on("/save-led", HTTP_POST, handleSaveLed);
     server.on("/api/pins", HTTP_GET, handlePins);
     server.on("/api/playlists", HTTP_GET, handleWebPlaylists);
     server.on("/api/lookup", HTTP_GET, handleLookup);

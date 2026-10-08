@@ -1,6 +1,7 @@
 #include "ui.h"
 #include "app_log.h"
 #include "config.h"
+#include "led.h"
 #include <LittleFS.h>
 #include <TJpg_Decoder.h>
 #include <lvgl.h>
@@ -50,6 +51,8 @@ lv_obj_t *listRowLbl[LIST_ROWS];
 
 lv_obj_t *popup = nullptr;
 String (*infoProvider)() = nullptr;
+void (*resetHandler)() = nullptr;
+uint32_t resetArmedUntil = 0;
 
 lv_color_t *bgPixels = nullptr;
 lv_img_dsc_t bgDsc;
@@ -59,6 +62,7 @@ int cropX = 0;
 int cropY = 0;
 uint32_t sumR, sumG, sumB, pixelCount;
 lv_color_t curAccent = DEFAULT_ACCENT;
+bool ledArmed = false;
 
 PlayerState lastState;
 String shownTrackId;
@@ -66,6 +70,7 @@ String shownTitle;
 String shownArtist;
 String shownMessage;
 String tempMessage;
+String hintText;
 uint32_t tempMessageUntil = 0;
 bool shownPlaying = false;
 int shownVolume = -2;
@@ -196,6 +201,7 @@ lv_obj_t *makeButtonLabel(lv_obj_t *btn, const char *text) {
 
 void applyTheme(lv_color_t accent, lv_color_t tint) {
     curAccent = accent;
+    if (ledArmed) led_set_color(lv_color_to32(accent) & 0xFFFFFF);
     styleScreen(screenPlayer, tint);
     lv_obj_set_style_bg_color(barProgress, accent, LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(btnPlay, accent, 0);
@@ -217,7 +223,18 @@ void closePopup(lv_event_t *) {
     popup = nullptr;
 }
 
-void showPopup(const char *title, const String &body, const char *footer) {
+void onResetTap(lv_event_t *e) {
+    lv_obj_t *label = lv_obj_get_child(lv_event_get_target(e), 0);
+    if ((int32_t)(millis() - resetArmedUntil) < 0) {
+        lv_label_set_text(label, "Working...");
+        if (resetHandler) resetHandler();
+        return;
+    }
+    resetArmedUntil = millis() + 4000;
+    lv_label_set_text(label, "Tap to confirm");
+}
+
+void showPopup(const char *title, const String &body, const char *footer, bool withReset = false) {
     if (popup) lv_obj_del(popup);
 
     popup = lv_obj_create(lv_layer_top());
@@ -247,11 +264,20 @@ void showPopup(const char *title, const String &body, const char *footer) {
     lv_obj_t *lblF = makeLabel(card, 16, 190, 264, TEXT_DIM, &font_ui_14);
     makeSingleLine(lblF, &font_ui_14);
     lv_label_set_text(lblF, footer);
+
+    if (withReset) {
+        lv_obj_set_height(lblB, 134);
+        lv_obj_set_width(lblF, 110);
+        lv_obj_t *btn = makeGlassButton(card, 140, 176, 140, 30, onResetTap, nullptr);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0xB3261E), 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+        makeButtonLabel(btn, "Forget Wi-Fi");
+    }
 }
 
 void onLongPress(lv_event_t *) {
     if (popup || !infoProvider) return;
-    showPopup("Device info", infoProvider(), "Tap to close");
+    showPopup("Device info", infoProvider(), "Tap to close", true);
 }
 
 String formatDuration(uint32_t ms) {
@@ -669,7 +695,17 @@ void ui_set_info_provider(String (*provider)()) {
     infoProvider = provider;
 }
 
+void ui_set_hint(const char *text) {
+    hintText = text;
+}
+
+void ui_set_reset_handler(void (*handler)()) {
+    resetHandler = handler;
+}
+
 void show_setup_screen() {
+    ledArmed = false;
+    led_set_color(0);
     lv_scr_load(screenSetup);
 }
 
@@ -688,6 +724,8 @@ void ui_set_setup_status(const char *text) {
 }
 
 void show_player_screen() {
+    ledArmed = true;
+    led_set_color(lv_color_to32(curAccent) & 0xFFFFFF);
     showPlayerScreen();
 }
 
@@ -706,7 +744,7 @@ void ui_update_player(const PlayerState &s) {
     }
 
     bool tempActive = (int32_t)(millis() - tempMessageUntil) < 0;
-    const String &rawMessage = tempActive ? tempMessage : s.message;
+    const String &rawMessage = tempActive ? tempMessage : (hintText.length() ? hintText : s.message);
     String message = cleanText(rawMessage);
     if (message != shownMessage) {
         shownMessage = message;

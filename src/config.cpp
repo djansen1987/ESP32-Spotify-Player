@@ -1,6 +1,7 @@
 #include "config.h"
 #include <ArduinoJson.h>
 #include <LittleFS.h>
+#include <algorithm>
 
 static const char *CONFIG_PATH = "/config.json";
 
@@ -29,10 +30,22 @@ void config_load() {
         return;
     }
 
-    g_config.ssid = doc["ssid"] | "";
-    g_config.pass = doc["pass"] | "";
+    g_config.networks.clear();
+    for (JsonObject o : doc["wifi"].as<JsonArray>()) {
+        if (g_config.networks.size() >= MAX_NETWORKS) break;
+        WifiNet net;
+        net.ssid = (const char *)(o["ssid"] | "");
+        net.pass = (const char *)(o["pass"] | "");
+        if (net.ssid.length()) g_config.networks.push_back(std::move(net));
+    }
+    // Older firmware stored a single network.
+    const char *legacySsid = doc["ssid"] | "";
+    if (g_config.networks.empty() && legacySsid[0]) {
+        g_config.networks.push_back({legacySsid, (const char *)(doc["pass"] | "")});
+    }
     g_config.clientId = doc["client_id"] | "";
     g_config.artSize = doc["art_size"] | 300;
+    g_config.ledBrightness = constrain((int)(doc["led_brightness"] | 40), 0, 100);
     g_config.refreshToken = doc["refresh_token"] | "";
 
     g_config.pins.clear();
@@ -48,10 +61,15 @@ void config_load() {
 bool config_save() {
     ScopedLock lock;
     JsonDocument doc;
-    doc["ssid"] = g_config.ssid;
-    doc["pass"] = g_config.pass;
+    JsonArray wifi = doc["wifi"].to<JsonArray>();
+    for (const WifiNet &net : g_config.networks) {
+        JsonObject o = wifi.add<JsonObject>();
+        o["ssid"] = net.ssid;
+        o["pass"] = net.pass;
+    }
     doc["client_id"] = g_config.clientId;
     doc["art_size"] = g_config.artSize;
+    doc["led_brightness"] = g_config.ledBrightness;
     doc["refresh_token"] = g_config.refreshToken;
     JsonArray pins = doc["pins"].to<JsonArray>();
     for (const Pin &pin : g_config.pins) {
@@ -65,6 +83,57 @@ bool config_save() {
     serializeJson(doc, file);
     file.close();
     return true;
+}
+
+std::vector<WifiNet> config_get_networks() {
+    ScopedLock lock;
+    return g_config.networks;
+}
+
+bool config_has_networks() {
+    ScopedLock lock;
+    return !g_config.networks.empty();
+}
+
+void config_add_network(const String &ssid, const String &pass) {
+    ScopedLock lock;
+    for (size_t i = 0; i < g_config.networks.size(); i++) {
+        if (g_config.networks[i].ssid == ssid) {
+            g_config.networks.erase(g_config.networks.begin() + i);
+            break;
+        }
+    }
+    g_config.networks.insert(g_config.networks.begin(), {ssid, pass});
+    if (g_config.networks.size() > MAX_NETWORKS) g_config.networks.pop_back();
+    config_save();
+}
+
+void config_promote_network(const String &ssid) {
+    ScopedLock lock;
+    for (size_t i = 1; i < g_config.networks.size(); i++) {
+        if (g_config.networks[i].ssid == ssid) {
+            std::rotate(g_config.networks.begin(), g_config.networks.begin() + i, g_config.networks.begin() + i + 1);
+            config_save();
+            return;
+        }
+    }
+}
+
+void config_remove_network(const String &ssid) {
+    ScopedLock lock;
+    for (size_t i = 0; i < g_config.networks.size(); i++) {
+        if (g_config.networks[i].ssid == ssid) {
+            g_config.networks.erase(g_config.networks.begin() + i);
+            config_save();
+            return;
+        }
+    }
+}
+
+void config_clear_networks() {
+    ScopedLock lock;
+    g_config.networks.clear();
+    config_save();
 }
 
 std::vector<Pin> config_get_pins() {

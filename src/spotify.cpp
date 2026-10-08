@@ -29,6 +29,8 @@ PlayerState shared;
 SemaphoreHandle_t artLock;
 volatile bool artReady = false;
 uint32_t lastPollMs = 0;
+volatile uint32_t lastOkMs = 0;
+volatile bool everOk = false;
 
 struct CmdMsg {
     uint8_t cmd;
@@ -96,7 +98,7 @@ String describeError(const String &body, int code) {
             if (err[0]) return err;
         }
     }
-    return code > 0 ? "HTTP " + String(code) : "Network error";
+    return code > 0 ? "HTTP " + String(code) : "No connection to Spotify. Long-press the screen to forget this Wi-Fi.";
 }
 
 HttpResult httpOnce(const char *method, const String &url, const char *contentType, const String &body, const String &bearer, const char *savePath) {
@@ -393,6 +395,10 @@ void pollPlayer() {
     uint32_t t0 = millis();
     HttpResult r = apiCall("GET", "/me/player?additional_types=track,episode");
     lastPollMs = millis() - t0;
+    if (r.code == 200 || r.code == 204) {
+        lastOkMs = millis();
+        everOk = true;
+    }
 
     if (r.code == 200 && r.body.length()) {
         PlayerState s;
@@ -782,6 +788,8 @@ void spotify_get_list(ListKind kind, ListData &out) {
 }
 
 uint32_t spotify_last_poll_ms() { return lastPollMs; }
+
+bool spotify_recently_ok(uint32_t withinMs) { return everOk && millis() - lastOkMs < withinMs; }
 
 bool spotify_token_valid() { return !accessToken.isEmpty() && !reached(tokenExpiresAt); }
 

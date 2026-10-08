@@ -1,10 +1,12 @@
 #include "config.h"
 #include "app_log.h"
 #include "display.h"
+#include "led.h"
 #include "spotify.h"
 #include "ui.h"
 #include "web_portal.h"
 #include <Arduino.h>
+#include <HTTPClient.h>
 #include <LittleFS.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
@@ -22,16 +24,28 @@ enum AppState {
 };
 
 static const char *AP_NAME = "Spotify-Player-Setup";
-static const uint32_t WIFI_CONNECT_TIMEOUT_MS = 20000;
+static const uint32_t WIFI_CONNECT_TIMEOUT_MS = 12000;
+static const uint32_t NET_RECHECK_MS = 60000;
+static const size_t MAX_NETWORK_ATTEMPTS = 4;
 static const uint32_t AP_RETRY_STA_MS = 5UL * 60 * 1000;
 static const uint32_t UI_TICK_MS = 250;
 static const uint32_t HEAP_CHECK_MS = 5000;
 static const uint32_t LOW_HEAP_BYTES = 25000;
 
 static AppState appState = WIFI_SETUP_MODE;
+volatile bool g_internetOk = true;
+static uint32_t lastNetCheck = 0;
 static uint32_t apStartedAt = 0;
 static uint32_t lastTick = 0;
 static uint32_t lastHeapCheck = 0;
+static volatile bool resetRequested = false;
+static bool rescueAp = false;
+static uint32_t offlineSince = 0;
+static uint32_t bootHeldSince = 0;
+static const uint32_t OFFLINE_WINDOW_MS = 60000;
+static const uint32_t RESCUE_AFTER_MS = 120000;
+static const uint32_t HINT_AFTER_MS = 20000;
+static const uint32_t BOOT_HOLD_MS = 3000;
 
 static void logResetReason() {
     esp_reset_reason_t reason = esp_reset_reason();
@@ -83,14 +97,12 @@ static String deviceInfo() {
         int rssi = WiFi.RSSI();
         const char *quality = rssi >= -55 ? "excellent" : rssi >= -65 ? "good" : rssi >= -75 ? "fair" : "weak";
         t += "IP: " + WiFi.localIP().toString() + "\n";
-        t += "Gateway: " + WiFi.gatewayIP().toString() + "\n";
         t += "SSID: " + WiFi.SSID() + " (ch " + String(WiFi.channel()) + ")\n";
         t += "Signal: " + String(rssi) + " dBm (" + quality + ")\n";
     } else {
         t += "Wi-Fi not connected\n";
         t += "Setup IP: " + WiFi.softAPIP().toString() + "\n";
-        t += "Stored SSID: " + g_config.ssid + "\n";
-        t += "Clients on setup AP: " + String(WiFi.softAPgetStationNum()) + "\n";
+        t += "Known networks: " + String(config_get_networks().size()) + "\n";
     }
     t += "MAC: " + WiFi.macAddress() + "\n";
     uint32_t up = millis() / 1000;
@@ -98,18 +110,31 @@ static String deviceInfo() {
     snprintf(buf, sizeof(buf), "Up %uh %02um, reset: %s\n", (unsigned)(up / 3600), (unsigned)((up / 60) % 60), resetReasonName());
     t += buf;
     snprintf(buf, sizeof(buf), "Heap: %uK free, %uK block\n", (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(ESP.getMaxAllocHeap() / 1024));
+    if (rescueAp) snprintf(buf, sizeof(buf), "Setup AP: %s (192.168.4.1)\n", AP_NAME);
     t += buf;
     snprintf(buf, sizeof(buf), "Spotify: %s, poll %u ms", spotify_token_valid() ? "token ok" : "no token", (unsigned)spotify_last_poll_ms());
     t += buf;
     return t;
 }
 
-static bool connectStation() {
-    WiFi.mode(WIFI_STA);
-    WiFi.setSleep(false);
-    WiFi.setAutoReconnect(true);
-    WiFi.begin(g_config.ssid.c_str(), g_config.pass.c_str());
-    ui_set_setup_status("Connecting to Wi-Fi...");
+// A captive portal answers with a redirect instead of 204.
+static bool checkInternet() {
+    WiFiClient client;
+    HTTPClient http;
+    http.setConnectTimeout(3000);
+    http.setTimeout(3000);
+    if (!http.begin(client, "http://connectivitycheck.gstatic.com/generate_204")) return false;
+    int code = http.GET();
+    http.end();
+    return code == 204;
+}
+
+static bool tryNetwork(const WifiNet &net) {
+    String status = "Connecting to\n" + net.ssid + "...";
+    ui_set_setup_status(status.c_str());
+    WiFi.disconnect();
+    delay(100);
+    WiFi.begin(net.ssid.c_str(), net.pass.c_str());
 
     uint32_t start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
@@ -117,6 +142,53 @@ static bool connectStation() {
         delay(50);
     }
     return WiFi.status() == WL_CONNECTED;
+}
+
+static bool connectStation() {
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
+    WiFi.setAutoReconnect(true);
+
+    std::vector<WifiNet> known = config_get_networks();
+    if (known.empty()) return false;
+
+    ui_set_setup_status("Looking for known\nWi-Fi networks...");
+    lv_timer_handler();
+    int found = WiFi.scanNetworks();
+    std::vector<WifiNet> candidates;
+    for (const WifiNet &net : known) {
+        for (int i = 0; i < found; i++) {
+            if (WiFi.SSID(i) == net.ssid) {
+                candidates.push_back(net);
+                break;
+            }
+        }
+    }
+    WiFi.scanDelete();
+    // Hidden networks do not show up in a scan, so fall back to trying every saved network.
+    if (candidates.empty()) candidates = known;
+    if (candidates.size() > MAX_NETWORK_ATTEMPTS) candidates.resize(MAX_NETWORK_ATTEMPTS);
+
+    int noInternet = -1;
+    for (size_t i = 0; i < candidates.size(); i++) {
+        if (!tryNetwork(candidates[i])) continue;
+        ui_set_setup_status("Checking internet...");
+        lv_timer_handler();
+        if (checkInternet()) {
+            config_promote_network(candidates[i].ssid);
+            g_internetOk = true;
+            return true;
+        }
+        app_log(LL_WARN, "Wi-Fi '%s' has no internet access (captive portal?)", candidates[i].ssid.c_str());
+        if (noInternet < 0) noInternet = i;
+    }
+
+    // Stay reachable on a network without internet so the Wi-Fi settings can still be changed.
+    if (noInternet >= 0 && tryNetwork(candidates[noInternet])) {
+        g_internetOk = false;
+        return true;
+    }
+    return false;
 }
 
 static void startAccessPoint() {
@@ -163,6 +235,64 @@ static void updatePlayerUi() {
     }
 }
 
+static void requestWifiReset() { resetRequested = true; }
+
+static void handleWifiReset() {
+    if (!resetRequested) return;
+    String current = WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String();
+    if (current.length()) {
+        config_remove_network(current);
+    } else {
+        config_clear_networks();
+    }
+    show_setup_screen();
+    ui_set_setup_status(current.length() ? "Network forgotten.\nRestarting..." : "Wi-Fi settings cleared.\nRestarting in setup mode...");
+    for (int i = 0; i < 30; i++) {
+        lv_timer_handler();
+        delay(30);
+    }
+    ESP.restart();
+}
+
+static void handleBootButton() {
+    if (digitalRead(0) != LOW) {
+        bootHeldSince = 0;
+        return;
+    }
+    if (!bootHeldSince) bootHeldSince = millis();
+    if (millis() - bootHeldSince > BOOT_HOLD_MS) resetRequested = true;
+}
+
+// A guest network with a captive portal connects but has no internet, so keep a setup AP reachable.
+static void handleRescueAp() {
+    if (appState == WIFI_SETUP_MODE) return;
+    bool wifiDown = WiFi.status() != WL_CONNECTED;
+    if (appState == READY && millis() > OFFLINE_WINDOW_MS) {
+        g_internetOk = spotify_recently_ok(OFFLINE_WINDOW_MS);
+    } else if (!wifiDown && !g_internetOk && millis() - lastNetCheck > NET_RECHECK_MS) {
+        lastNetCheck = millis();
+        if (checkInternet()) g_internetOk = true;
+    }
+    bool offline = wifiDown || !g_internetOk;
+    if (!offline) {
+        ui_set_hint("");
+        offlineSince = 0;
+        if (rescueAp) {
+            WiFi.softAPdisconnect(true);
+            WiFi.mode(WIFI_STA);
+            rescueAp = false;
+        }
+        return;
+    }
+    if (!offlineSince) offlineSince = millis();
+    if (millis() - offlineSince > HINT_AFTER_MS) ui_set_hint("No internet. Long-press the screen to forget this Wi-Fi.");
+    if (!rescueAp && millis() - offlineSince > RESCUE_AFTER_MS) {
+        WiFi.mode(WIFI_AP_STA);
+        WiFi.softAP(AP_NAME);
+        rescueAp = true;
+    }
+}
+
 void setup() {
     Serial.begin(115200);
     log_init();
@@ -173,14 +303,17 @@ void setup() {
 
     if (!LittleFS.begin(true)) Serial.println("LittleFS mount failed");
     config_load();
+    led_init();
 
     display_init();
     ui_init();
     ui_set_info_provider(deviceInfo);
+    ui_set_reset_handler(requestWifiReset);
+    pinMode(0, INPUT_PULLUP);
     show_setup_screen();
     spotify_init();
 
-    if (g_config.ssid.length() && connectStation()) {
+    if (config_has_networks() && connectStation()) {
         if (g_config.refreshToken.length()) {
             enterReady();
         } else {
@@ -195,12 +328,16 @@ void setup() {
 
 void loop() {
     lv_timer_handler();
+    led_tick();
     web_portal_loop();
     handleSpotifyCode();
+    handleBootButton();
+    handleWifiReset();
+    handleRescueAp();
 
     if (appState == READY && spotify_auth_lost()) enterNoSpotify();
 
-    if (appState == WIFI_SETUP_MODE && g_config.ssid.length() && WiFi.softAPgetStationNum() == 0 &&
+    if (appState == WIFI_SETUP_MODE && config_has_networks() && WiFi.softAPgetStationNum() == 0 &&
         millis() - apStartedAt > AP_RETRY_STA_MS) {
         ESP.restart();
     }

@@ -102,6 +102,20 @@ The firmware uses the `huge_app.csv` partition table (3 MB app, ~0.9 MB LittleFS
 
 If the saved network cannot be reached, the device falls back to the access point. If nobody connects to it for 5 minutes it restarts and tries the saved network again.
 
+#### Multiple networks and changing Wi-Fi
+
+The device remembers up to 8 networks. Every network you add (Wi-Fi tab, in setup mode or when connected) is saved. At boot it scans for the saved networks, tries the ones that are in range in order of last use, and checks that the connection really has internet access. A network that connects but has no internet (for example a guest Wi-Fi with a captive portal) is skipped in favour of the next one; if no saved network has internet it stays on the best one so you can still reach the settings.
+
+Manage the saved networks on the **Wi-Fi** tab of the web interface, in setup mode and when connected: each network can be removed, and the connected one shows **Forget & disconnect**.
+
+If the current network has no working internet, the screen shows "No internet. Long-press the screen to forget this Wi-Fi." and the device also starts the `Spotify-Player-Setup` access point next to the normal connection after about 2 minutes. To leave the network you can:
+
+- **On the device:** long-press the screen to open the device info popup and tap **Forget Wi-Fi** twice (the second tap confirms). This forgets only the connected network; the device then restarts and joins another saved network, or starts setup mode if there is none.
+- **BOOT button:** hold the BOOT button on the back of the board for 3 seconds (same as above).
+- **Web interface:** on the Wi-Fi tab use **Forget & disconnect** next to the connected network, or **Forget all & restart in setup mode**.
+
+Forgetting a network removes only Wi-Fi credentials. Your Spotify login, pins and settings are kept.
+
 ### 2. Create a Spotify app
 
 1. Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and create an app (the Web API is the only API needed).
